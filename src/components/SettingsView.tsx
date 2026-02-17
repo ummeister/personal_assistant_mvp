@@ -193,7 +193,7 @@ LLM_MODEL=claude-opus-4-6
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_PUBLISHABLE_KEY=pk_test_...
 
-PORT=3001
+PORT=3100
 DRAFTS_DIR=./drafts`}</pre>
       </div>
     </div>

@@ -11,7 +11,7 @@ import { isOAuthConfigured } from './services/oauthService.ts';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = parseInt(process.env.PORT || '3001', 10);
+const PORT = parseInt(process.env.PORT || '3100', 10);
 const DRAFTS_DIR = path.resolve(process.env.DRAFTS_DIR || './drafts');
 const AUTO_MODE = process.env.AUTO_MODE !== 'false'; // true by default
 
