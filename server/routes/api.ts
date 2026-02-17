@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { ProjectStore } from '../services/projectStore.ts';
+import type { Orchestrator } from '../services/orchestrator.ts';
 import { scanDraftProject } from '../services/draftScanner.ts';
 import { analyzeProject, generateMonetizationPlan, generateMarketingCopy } from '../services/llmService.ts';
 import { setupStripeProducts, createCheckoutSession, isStripeConfigured } from '../services/stripeService.ts';
 import { createPipeline, advanceStep, failStep } from '../services/pipelineManager.ts';
 
-export function apiRouter(store: ProjectStore, draftsDir: string): Router {
+export function apiRouter(store: ProjectStore, orchestrator: Orchestrator, draftsDir: string): Router {
   const router = Router();
 
   // GET /api/drafts - List all draft projects
@@ -50,7 +51,7 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
     }
   });
 
-  // POST /api/drafts/:id/analyze - Run AI analysis
+  // POST /api/drafts/:id/analyze - Run AI analysis (with skill.md context)
   router.post('/drafts/:id/analyze', async (req: Request, res: Response) => {
     const draft = store.get(req.params.id);
     if (!draft) {
@@ -58,15 +59,17 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
       return;
     }
 
+    const skillContext = orchestrator.getSkillContent();
+
     try {
       // Scan first if not already scanned
       store.updateStatus(draft.id, 'scanning');
       const scan = await scanDraftProject(draft.path);
       store.update(draft.id, { scan });
 
-      // Run AI analysis
+      // Run AI analysis with skill context
       store.updateStatus(draft.id, 'analyzing');
-      const analysis = await analyzeProject(scan);
+      const analysis = await analyzeProject(scan, skillContext);
       store.setAnalysis(draft.id, analysis);
 
       res.json({ success: true, data: store.get(draft.id) });
@@ -77,7 +80,7 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
     }
   });
 
-  // POST /api/drafts/:id/monetize - Generate monetization plan
+  // POST /api/drafts/:id/monetize - Generate monetization plan (with skill.md context)
   router.post('/drafts/:id/monetize', async (req: Request, res: Response) => {
     const draft = store.get(req.params.id);
     if (!draft) {
@@ -89,9 +92,11 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
       return;
     }
 
+    const skillContext = orchestrator.getSkillContent();
+
     try {
       store.updateStatus(draft.id, 'planning');
-      const plan = await generateMonetizationPlan(draft.scan, draft.analysis);
+      const plan = await generateMonetizationPlan(draft.scan, draft.analysis, skillContext);
       store.setMonetizationPlan(draft.id, plan);
 
       // Create pipeline
@@ -106,7 +111,7 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
     }
   });
 
-  // POST /api/drafts/:id/full-pipeline - Run full pipeline (scan + analyze + monetize)
+  // POST /api/drafts/:id/full-pipeline - Run full pipeline via Orchestrator
   router.post('/drafts/:id/full-pipeline', async (req: Request, res: Response) => {
     const draft = store.get(req.params.id);
     if (!draft) {
@@ -115,26 +120,7 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
     }
 
     try {
-      // Step 1: Scan
-      store.updateStatus(draft.id, 'scanning');
-      const scan = await scanDraftProject(draft.path);
-      store.update(draft.id, { scan });
-
-      // Step 2: AI Analysis
-      store.updateStatus(draft.id, 'analyzing');
-      const analysis = await analyzeProject(scan);
-      store.setAnalysis(draft.id, analysis);
-
-      // Step 3: Monetization Plan
-      store.updateStatus(draft.id, 'planning');
-      const plan = await generateMonetizationPlan(scan, analysis);
-      store.setMonetizationPlan(draft.id, plan);
-
-      // Step 4: Create pipeline
-      const pipeline = createPipeline(analysis, plan);
-      store.setPipeline(draft.id, pipeline);
-      store.updateStatus(draft.id, 'planned');
-
+      await orchestrator.runFullPipeline(draft.id);
       res.json({ success: true, data: store.get(draft.id) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Pipeline failed';
@@ -221,7 +207,7 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
     }
   });
 
-  // POST /api/drafts/:id/marketing/:type - Generate marketing copy
+  // POST /api/drafts/:id/marketing/:type - Generate marketing copy (with skill.md context)
   router.post('/drafts/:id/marketing/:type', async (req: Request, res: Response) => {
     const draft = store.get(req.params.id);
     if (!draft?.analysis) {
@@ -235,13 +221,24 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
       return;
     }
 
+    const skillContext = orchestrator.getSkillContent();
+
     try {
-      const content = await generateMarketingCopy(draft.analysis, type);
+      const content = await generateMarketingCopy(draft.analysis, type, skillContext);
       res.json({ success: true, data: JSON.parse(content) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Marketing copy generation failed';
       res.status(500).json({ success: false, error: message });
     }
+  });
+
+  // POST /api/skill/reload - Reload skill.md without restarting
+  router.post('/skill/reload', (_req: Request, res: Response) => {
+    orchestrator.reloadSkill();
+    res.json({
+      success: true,
+      data: { loaded: !!orchestrator.getSkillContent(), length: orchestrator.getSkillContent().length },
+    });
   });
 
   // GET /api/config - Get current configuration status
@@ -251,6 +248,8 @@ export function apiRouter(store: ProjectStore, draftsDir: string): Router {
       data: {
         llmConfigured: !!process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'sk-your-api-key-here',
         stripeConfigured: isStripeConfigured(),
+        skillLoaded: !!orchestrator.getSkillContent(),
+        autoMode: process.env.AUTO_MODE !== 'false',
         draftsDir: draftsDir,
         llmModel: process.env.LLM_MODEL || 'gpt-4o-mini',
       },
