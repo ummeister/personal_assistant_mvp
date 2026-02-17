@@ -1,13 +1,37 @@
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import type { ProjectScan, ProjectAnalysis, MonetizationPlan } from '../../shared/types.ts';
 import { parseLLMResponse, ProjectAnalysisSchema, MonetizationPlanSchema } from './llmValidation.ts';
+import { getAccessToken } from './oauthService.ts';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '',
-  baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-});
+const MODEL = process.env.LLM_MODEL || 'claude-opus-4-6';
 
-const MODEL = process.env.LLM_MODEL || 'gpt-4o-mini';
+/**
+ * Crea un client Anthropic con la migliore autenticazione disponibile:
+ * 1. OAuth token (da login browser) - priorita'
+ * 2. API key (da .env) - fallback
+ */
+async function getClient(): Promise<Anthropic> {
+  // Try OAuth token first
+  const oauthToken = await getAccessToken();
+  if (oauthToken) {
+    return new Anthropic({ authToken: oauthToken, apiKey: null });
+  }
+
+  // Fall back to API key
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (apiKey && apiKey !== 'sk-ant-your-api-key-here') {
+    return new Anthropic({ apiKey });
+  }
+
+  throw new Error('Nessuna autenticazione configurata. Usa /api/auth/login per OAuth oppure configura ANTHROPIC_API_KEY nel .env');
+}
+
+/** Helper per estrarre testo dalla risposta Anthropic Messages API */
+function extractText(response: Anthropic.Message): string {
+  const block = response.content.find(b => b.type === 'text');
+  if (!block || block.type !== 'text') throw new Error('Empty LLM response');
+  return block.text;
+}
 
 /**
  * Analizza un progetto usando l'AI.
@@ -16,26 +40,23 @@ const MODEL = process.env.LLM_MODEL || 'gpt-4o-mini';
  */
 export async function analyzeProject(scan: ProjectScan, skillContext?: string): Promise<ProjectAnalysis> {
   const systemPrompt = skillContext
-    ? `${skillContext}\n\n---\n\nOra applica tutto il framework sopra per analizzare il seguente progetto. Rispondi SEMPRE in JSON valido.`
-    : `Sei un esperto analista di prodotti SaaS e micro-SaaS. Analizzi progetti software e ne comprendi il potenziale commerciale. Rispondi SEMPRE in JSON valido.`;
+    ? `${skillContext}\n\n---\n\nOra applica tutto il framework sopra per analizzare il seguente progetto. Rispondi SOLO con JSON valido, senza testo aggiuntivo prima o dopo.`
+    : `Sei un esperto analista di prodotti SaaS e micro-SaaS. Analizzi progetti software e ne comprendi il potenziale commerciale. Rispondi SOLO con JSON valido, senza testo aggiuntivo prima o dopo.`;
 
   const prompt = buildAnalysisPrompt(scan);
 
-  const response = await openai.chat.completions.create({
+  const client = await getClient();
+  const response = await client.messages.create({
     model: MODEL,
+    max_tokens: 4000,
+    system: systemPrompt,
     messages: [
-      { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt },
     ],
-    temperature: 0.7,
-    max_tokens: 4000,
-    response_format: { type: 'json_object' },
   });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) throw new Error('Empty LLM response');
-
-  return parseLLMResponse(content, ProjectAnalysisSchema, 'analyzeProject');
+  const text = extractText(response);
+  return parseLLMResponse(text, ProjectAnalysisSchema, 'analyzeProject');
 }
 
 /**
@@ -48,26 +69,23 @@ export async function generateMonetizationPlan(
   skillContext?: string
 ): Promise<MonetizationPlan> {
   const systemPrompt = skillContext
-    ? `${skillContext}\n\n---\n\nOra applica il framework di monetizzazione sopra per creare un piano completo. Concentrati su:\n- Strategia di pricing basata sulle regole d'oro\n- Piano marketing con canali prioritari per micro-SaaS\n- Landing page che segue la struttura "Above the fold + Social proof + Features + Pricing + FAQ"\n- Task azionabili che un developer solo puo' completare in 2-4 settimane\n- Proiezioni CONSERVATIVE di revenue\n\nRispondi SEMPRE in JSON valido.`
-    : `Sei un esperto di monetizzazione SaaS, growth hacking e marketing digitale. Crei piani dettagliati per portare micro-SaaS dalla bozza alla monetizzazione. Rispondi SEMPRE in JSON valido.`;
+    ? `${skillContext}\n\n---\n\nOra applica il framework di monetizzazione sopra per creare un piano completo. Concentrati su:\n- Strategia di pricing basata sulle regole d'oro\n- Piano marketing con canali prioritari per micro-SaaS\n- Landing page che segue la struttura "Above the fold + Social proof + Features + Pricing + FAQ"\n- Task azionabili che un developer solo puo' completare in 2-4 settimane\n- Proiezioni CONSERVATIVE di revenue\n\nRispondi SOLO con JSON valido, senza testo aggiuntivo prima o dopo.`
+    : `Sei un esperto di monetizzazione SaaS, growth hacking e marketing digitale. Crei piani dettagliati per portare micro-SaaS dalla bozza alla monetizzazione. Rispondi SOLO con JSON valido, senza testo aggiuntivo prima o dopo.`;
 
   const prompt = buildMonetizationPrompt(scan, analysis);
 
-  const response = await openai.chat.completions.create({
+  const client = await getClient();
+  const response = await client.messages.create({
     model: MODEL,
+    max_tokens: 8192,
+    system: systemPrompt,
     messages: [
-      { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt },
     ],
-    temperature: 0.7,
-    max_tokens: 6000,
-    response_format: { type: 'json_object' },
   });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) throw new Error('Empty LLM response');
-
-  return parseLLMResponse(content, MonetizationPlanSchema, 'generateMonetizationPlan');
+  const text = extractText(response);
+  return parseLLMResponse(text, MonetizationPlanSchema, 'generateMonetizationPlan');
 }
 
 /**
@@ -140,21 +158,20 @@ Formato JSON: { "ads": [{ "platform": "...", "headline": "...", "description": "
   };
 
   const systemPrompt = skillContext
-    ? `${skillContext}\n\n---\n\nSei in modalita' copywriting. Crea copy persuasivo e pronto per l'uso. Rispondi SEMPRE in JSON valido.`
-    : 'Sei un copywriter esperto di marketing digitale per prodotti SaaS. Rispondi SEMPRE in JSON valido.';
+    ? `${skillContext}\n\n---\n\nSei in modalita' copywriting. Crea copy persuasivo e pronto per l'uso. Rispondi SOLO con JSON valido, senza testo aggiuntivo prima o dopo.`
+    : 'Sei un copywriter esperto di marketing digitale per prodotti SaaS. Rispondi SOLO con JSON valido, senza testo aggiuntivo prima o dopo.';
 
-  const response = await openai.chat.completions.create({
+  const client = await getClient();
+  const response = await client.messages.create({
     model: MODEL,
+    max_tokens: 4000,
+    system: systemPrompt,
     messages: [
-      { role: 'system', content: systemPrompt },
       { role: 'user', content: prompts[type] || prompts.social },
     ],
-    temperature: 0.8,
-    max_tokens: 3000,
-    response_format: { type: 'json_object' },
   });
 
-  return response.choices[0]?.message?.content || '{}';
+  return extractText(response);
 }
 
 function buildAnalysisPrompt(scan: ProjectScan): string {

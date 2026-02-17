@@ -7,6 +7,7 @@ import { apiRouter } from './routes/api.ts';
 import { FolderWatcher } from './services/folderWatcher.ts';
 import { ProjectStore } from './services/projectStore.ts';
 import { Orchestrator } from './services/orchestrator.ts';
+import { isOAuthConfigured } from './services/oauthService.ts';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,9 +45,12 @@ if (process.env.NODE_ENV === 'production') {
 // Start watcher
 watcher.start();
 
-const llmStatus = process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'sk-your-api-key-here'
-  ? `LLM: ${process.env.LLM_MODEL || 'gpt-4o-mini'}`
-  : 'LLM: non configurato';
+const llmModel = process.env.LLM_MODEL || 'claude-opus-4-6';
+const llmStatus = isOAuthConfigured()
+  ? `LLM: Claude ${llmModel} (OAuth)`
+  : process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'sk-ant-your-api-key-here'
+  ? `LLM: Claude ${llmModel} (API key)`
+  : 'LLM: non configurato — usa /api/auth/login o ANTHROPIC_API_KEY';
 const stripeStatus = process.env.STRIPE_SECRET_KEY && process.env.STRIPE_SECRET_KEY !== 'sk_test_your-stripe-secret-key'
   ? 'Stripe: collegato'
   : 'Stripe: non configurato';
