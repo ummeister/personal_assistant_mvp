@@ -6,9 +6,61 @@ import { scanDraftProject } from '../services/draftScanner.ts';
 import { analyzeProject, generateMonetizationPlan, generateMarketingCopy } from '../services/llmService.ts';
 import { setupStripeProducts, createCheckoutSession, isStripeConfigured } from '../services/stripeService.ts';
 import { createPipeline, advanceStep, failStep } from '../services/pipelineManager.ts';
+import { startOAuthFlow, exchangeCode, getOAuthStatus, logout as oauthLogout, isOAuthConfigured } from '../services/oauthService.ts';
 
 export function apiRouter(store: ProjectStore, orchestrator: Orchestrator, draftsDir: string): Router {
   const router = Router();
+
+  // === Auth Routes ===
+
+  // GET /api/auth/status - Check authentication status
+  router.get('/auth/status', (_req: Request, res: Response) => {
+    const oauth = getOAuthStatus();
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const hasApiKey = !!apiKey && apiKey !== 'sk-ant-your-api-key-here';
+
+    res.json({
+      success: true,
+      data: {
+        method: oauth.authenticated ? 'oauth' : hasApiKey ? 'api_key' : 'none',
+        oauthAuthenticated: oauth.authenticated,
+        oauthExpiresAt: oauth.expiresAt,
+        hasApiKey,
+      },
+    });
+  });
+
+  // POST /api/auth/login - Start OAuth flow (returns URL to open in browser)
+  router.post('/auth/login', (_req: Request, res: Response) => {
+    const { authUrl, state } = startOAuthFlow();
+    res.json({
+      success: true,
+      data: { authUrl, state },
+    });
+  });
+
+  // POST /api/auth/callback - Exchange authorization code for token
+  router.post('/auth/callback', async (req: Request, res: Response) => {
+    const { code, state } = req.body;
+    if (!code || !state) {
+      res.status(400).json({ success: false, error: 'Missing code or state' });
+      return;
+    }
+
+    try {
+      await exchangeCode(code, state);
+      res.json({ success: true, data: { message: 'Autenticazione completata!' } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'OAuth exchange failed';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  // POST /api/auth/logout - Clear stored OAuth token
+  router.post('/auth/logout', (_req: Request, res: Response) => {
+    oauthLogout();
+    res.json({ success: true, data: { message: 'Logout completato' } });
+  });
 
   // GET /api/drafts - List all draft projects
   router.get('/drafts', (_req: Request, res: Response) => {
@@ -246,12 +298,13 @@ export function apiRouter(store: ProjectStore, orchestrator: Orchestrator, draft
     res.json({
       success: true,
       data: {
-        llmConfigured: !!process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'sk-your-api-key-here',
+        llmConfigured: isOAuthConfigured() || (!!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'sk-ant-your-api-key-here'),
+        authMethod: isOAuthConfigured() ? 'oauth' : (!!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'sk-ant-your-api-key-here') ? 'api_key' : 'none',
         stripeConfigured: isStripeConfigured(),
         skillLoaded: !!orchestrator.getSkillContent(),
         autoMode: process.env.AUTO_MODE !== 'false',
         draftsDir: draftsDir,
-        llmModel: process.env.LLM_MODEL || 'gpt-4o-mini',
+        llmModel: process.env.LLM_MODEL || 'claude-opus-4-6',
       },
     });
   });

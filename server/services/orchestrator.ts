@@ -7,6 +7,7 @@ import { scanDraftProject } from './draftScanner.ts';
 import { analyzeProject, generateMonetizationPlan } from './llmService.ts';
 import { createPipeline } from './pipelineManager.ts';
 import { setupStripeProducts, isStripeConfigured } from './stripeService.ts';
+import { isOAuthConfigured } from './oauthService.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -209,7 +210,8 @@ export class Orchestrator {
   }
 
   private isLLMConfigured(): boolean {
-    const key = process.env.OPENAI_API_KEY;
-    return !!key && key !== 'sk-your-api-key-here';
+    if (isOAuthConfigured()) return true;
+    const key = process.env.ANTHROPIC_API_KEY;
+    return !!key && key !== 'sk-ant-your-api-key-here';
   }
 }

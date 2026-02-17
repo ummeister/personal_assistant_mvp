@@ -58,8 +58,27 @@ export const api = {
   getConfig: () =>
     request<{
       llmConfigured: boolean;
+      authMethod: 'oauth' | 'api_key' | 'none';
       stripeConfigured: boolean;
       draftsDir: string;
       llmModel: string;
     }>('/config'),
+
+  // Auth
+  getAuthStatus: () =>
+    request<{
+      method: 'oauth' | 'api_key' | 'none';
+      oauthAuthenticated: boolean;
+      oauthExpiresAt: number | null;
+      hasApiKey: boolean;
+    }>('/auth/status'),
+  startLogin: () =>
+    request<{ authUrl: string; state: string }>('/auth/login', { method: 'POST' }),
+  completeLogin: (code: string, state: string) =>
+    request<{ message: string }>('/auth/callback', {
+      method: 'POST',
+      body: JSON.stringify({ code, state }),
+    }),
+  logout: () =>
+    request<{ message: string }>('/auth/logout', { method: 'POST' }),
 };
