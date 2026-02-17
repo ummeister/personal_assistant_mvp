@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { ProjectScan, ProjectAnalysis, MonetizationPlan } from '../../shared/types.ts';
+import { parseLLMResponse, ProjectAnalysisSchema, MonetizationPlanSchema } from './llmValidation.ts';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
@@ -34,7 +35,7 @@ export async function analyzeProject(scan: ProjectScan, skillContext?: string): 
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('Empty LLM response');
 
-  return JSON.parse(content) as ProjectAnalysis;
+  return parseLLMResponse(content, ProjectAnalysisSchema, 'analyzeProject');
 }
 
 /**
@@ -66,7 +67,7 @@ export async function generateMonetizationPlan(
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error('Empty LLM response');
 
-  return JSON.parse(content) as MonetizationPlan;
+  return parseLLMResponse(content, MonetizationPlanSchema, 'generateMonetizationPlan');
 }
 
 /**

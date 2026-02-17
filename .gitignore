@@ -28,3 +28,6 @@ dist-ssr
 
 # Drafts (user content)
 drafts/
+
+# Persisted data
+data/

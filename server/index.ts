@@ -66,6 +66,7 @@ app.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\nShutting down...');
+  store.flush();
   watcher.stop();
   process.exit(0);
 });
